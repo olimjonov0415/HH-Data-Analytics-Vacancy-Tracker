@@ -404,13 +404,13 @@ def fetch_vacancies():
 # Регион: Y Предполагаемый уровень месячного дохода: Z" ko'rinishida bitta
 # qatorga yig'ilgan holda keladi (strip_html bo'sh joylarni birlashtiradi).
 DESCRIPTION_FIELD_LABELS = [
-    "Вакансия компании",
-    "Создана",
-    "Регион",
-    "Предполагаемый уровень месячного дохода",
+    "Company vacancy",
+    "Created",
+    "Region",
+    "Estimated monthly income level",
 ]
 
-DEFAULT_FIELD_VALUE = "не указано"
+DEFAULT_FIELD_VALUE = "not specified"
 
 
 def parse_description_fields(description):
