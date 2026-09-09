@@ -1,6 +1,6 @@
 """
-hh.uz (Toshkent) saytidan "data analytics"ga oid yangi vakansiyalarni
-topib, Telegram botga yuboradi.
+hh.uz (butun O'zbekiston bo'yicha) saytidan "data analytics"ga oid yangi
+vakansiyalarni topib, Telegram botga yuboradi.
 
 MUHIM: hh.ru/hh.uz 2026-yil aprelidan boshlab api.hh.ru JSON API'sini
 autentifikatsiyasiz so'rovlar uchun yopib qo'ygan (403/400 xato beradi).
@@ -28,7 +28,7 @@ from email.utils import parsedate_to_datetime
 import requests
 
 # ---------- SOZLAMALAR ----------
-HH_AREA_ID = 2759  # Toshkent
+HH_AREA_ID = 97  # O'zbekiston (butun mamlakat, faqat Toshkent emas)
 # hh.uz RSS'i "OR" mantiqini URL ichida to'g'ri qo'llamaydi (filtrsiz natija
 # qaytarib yuboradi), shuning uchun har bir so'z alohida so'rov sifatida
 # yuboriladi va natijalar keyin birlashtiriladi.
@@ -120,7 +120,20 @@ ROOT_EXACT_WORDS = ["bi"]
 ROOT_PATTERNS = [re.compile(rf"\b{re.escape(w)}\w*", re.IGNORECASE) for w in ROOT_PREFIXES]
 ROOT_PATTERNS += [re.compile(rf"\b{re.escape(w)}\b", re.IGNORECASE) for w in ROOT_EXACT_WORDS]
 
-RSS_URL = "https://tashkent.hh.uz/search/vacancy/rss"
+# Sarlavhada quyidagi iboralardan biri uchrasa, vakansiya boshqa hech qanday
+# kalit so'zga/ildizga mos kelsa ham RAD ETILADI (masalan "аналитик" ildiz
+# so'ziga mos kelgani uchun "Системный аналитик" o'tib ketmasligi uchun).
+EXCLUDE_KEYWORDS = [
+    "системный аналитик",
+    "систем аналитик",
+    "тизим аналитиги",
+    "tizim analitigi",
+    "system analyst",
+    "systems analyst",
+]
+EXCLUDE_PATTERNS = [re.compile(re.escape(w), re.IGNORECASE) for w in EXCLUDE_KEYWORDS]
+
+RSS_URL = "https://hh.uz/search/vacancy/rss"
 SEEN_IDS_FILE = "seen_ids.json"
 LAST_RUN_FILE = "last_run.json"  # har run oxirida yoziladi — "run bo'ldi,
                                   # lekin yangi vakansiya topilmadi" holatini
@@ -199,6 +212,12 @@ def matched_keyword(title):
     SARLAVHADA aynan mos so'z bo'lgan vakansiyalar qabul qilinadi.
     Mos kelgan so'zni qaytaradi, aks holda None."""
     title_lower = title.lower()
+
+    # 0) Avval istisnolar tekshiriladi — "Системный аналитик" kabi
+    # sarlavhalar "аналитик" ildiziga mos kelsa ham chiqarib tashlanadi.
+    for pattern in EXCLUDE_PATTERNS:
+        if pattern.search(title_lower):
+            return None
 
     # 1) Avval to'liq/aniq iboralar tekshiriladi (masalan "Power BI", "Tableau")
     for keyword in SEARCH_KEYWORDS:
