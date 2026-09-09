@@ -399,12 +399,52 @@ def fetch_vacancies():
     return fresh_items[:MAX_RESULTS_PER_RUN]
 
 
+# Tavsif (description) ichidan ajratib olinadigan maydonlar, aynan shu
+# tartibda. hh.uz RSS tavsifi odatda "Вакансия компании: X Создана: DD.MM.YYYY
+# Регион: Y Предполагаемый уровень месячного дохода: Z" ko'rinishida bitta
+# qatorga yig'ilgan holda keladi (strip_html bo'sh joylarni birlashtiradi).
+DESCRIPTION_FIELD_LABELS = [
+    "Вакансия компании",
+    "Создана",
+    "Регион",
+    "Предполагаемый уровень месячного дохода",
+]
+
+DEFAULT_FIELD_VALUE = "не указано"
+
+
+def parse_description_fields(description):
+    """Tavsif matnidan DESCRIPTION_FIELD_LABELS'dagi har bir maydonni ajratib
+    oladi. Har bir maydon qiymati — o'zidan keyingi maydon labeli (yoki matn
+    oxiri)gacha bo'lgan matn. Agar biror maydon topilmasa (hh.uz format
+    o'zgartirsa yoki maydon umuman bo'lmasa), xabar baribir "sinmasligi" uchun
+    DEFAULT_FIELD_VALUE qo'yiladi — shu tufayli chiqadigan xabar tuzilishi
+    har doim bir xil (4 qator + sarlavha + havola) bo'lib qoladi."""
+    fields = {}
+    for i, label in enumerate(DESCRIPTION_FIELD_LABELS):
+        next_labels = DESCRIPTION_FIELD_LABELS[i + 1:]
+        if next_labels:
+            lookahead = "|".join(re.escape(l) for l in next_labels)
+            pattern = rf"{re.escape(label)}:\s*(.*?)(?=(?:{lookahead}):|$)"
+        else:
+            pattern = rf"{re.escape(label)}:\s*(.*)$"
+        match = re.search(pattern, description)
+        value = match.group(1).strip() if match else ""
+        fields[label] = value if value else DEFAULT_FIELD_VALUE
+    return fields
+
+
 def format_message(vacancy):
-    return (
-        f"📊 <b>{vacancy['title']}</b>\n"
-        f"{vacancy['description']}\n"
-        f"🔗 {vacancy['link']}"
-    )
+    """Har bir vakansiya uchun XABAR TUZILISHI DOIM BIR XIL bo'lishini
+    kafolatlaydi: sarlavha, so'ngra 4 ta belgilangan maydon (har biri o'z
+    qatorida, o'z labeli bilan), so'ngra havola — hh.uz'ning xom tavsif
+    matni qanday kelishidan qat'i nazar."""
+    fields = parse_description_fields(vacancy["description"])
+    lines = [f"📊 <b>{vacancy['title']}</b>"]
+    for label in DESCRIPTION_FIELD_LABELS:
+        lines.append(f"{label}: {fields[label]}")
+    lines.append(f"🔗 {vacancy['link']}")
+    return "\n".join(lines)
 
 
 def send_to_telegram(text):
