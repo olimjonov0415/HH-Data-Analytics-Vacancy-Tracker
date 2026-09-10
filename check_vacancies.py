@@ -403,11 +403,19 @@ def fetch_vacancies():
 # tartibda. hh.uz RSS tavsifi odatda "Вакансия компании: X Создана: DD.MM.YYYY
 # Регион: Y Предполагаемый уровень месячного дохода: Z" ko'rinishida bitta
 # qatorga yig'ilgan holda keladi (strip_html bo'sh joylarni birlashtiradi).
+#
+# MUHIM: bu yerdagi birinchi element — TAVSIFDA HAQIQATDA ISHLATILADIGAN
+# RUS TILIDAGI label ("Вакансия компании", "Регион" va h.k.). Ilgari bu
+# yerda xato ravishda inglizcha "Company", "Region" kabi so'zlar turgan edi
+# va ular tavsif matnida umuman uchramagani uchun har doim DEFAULT_FIELD_VALUE
+# ("not specified") chiqib turardi — bu faqat bitta vakansiyaga emas, BARCHA
+# vakansiyalarga tegishli bug edi. Ikkinchi element — xabarda ko'rinadigan
+# (inglizcha) label, u eskisidek qoldirildi.
 DESCRIPTION_FIELD_LABELS = [
-    "Company",
-    "Created",
-    "Region",
-    "Income",
+    ("Вакансия компании", "Company"),
+    ("Создана", "Created"),
+    ("Регион", "Region"),
+    ("Предполагаемый уровень месячного дохода", "Income"),
 ]
 
 DEFAULT_FIELD_VALUE = "not specified"
@@ -415,34 +423,115 @@ DEFAULT_FIELD_VALUE = "not specified"
 
 def parse_description_fields(description):
     """Tavsif matnidan DESCRIPTION_FIELD_LABELS'dagi har bir maydonni ajratib
-    oladi. Har bir maydon qiymati — o'zidan keyingi maydon labeli (yoki matn
-    oxiri)gacha bo'lgan matn. Agar biror maydon topilmasa (hh.uz format
-    o'zgartirsa yoki maydon umuman bo'lmasa), xabar baribir "sinmasligi" uchun
-    DEFAULT_FIELD_VALUE qo'yiladi — shu tufayli chiqadigan xabar tuzilishi
-    har doim bir xil (4 qator + sarlavha + havola) bo'lib qoladi."""
+    oladi (qidiruv HAQIQIY rus tilidagi labellar bo'yicha, natija esa
+    inglizcha ko'rinadigan label bilan qaytariladi). Har bir maydon qiymati —
+    o'zidan keyingi maydon labeli (yoki matn oxiri)gacha bo'lgan matn. Agar
+    biror maydon topilmasa (hh.uz format o'zgartirsa yoki maydon umuman
+    bo'lmasa), xabar baribir "sinmasligi" uchun DEFAULT_FIELD_VALUE qo'yiladi
+    — shu tufayli chiqadigan xabar tuzilishi har doim bir xil bo'lib qoladi."""
     fields = {}
-    for i, label in enumerate(DESCRIPTION_FIELD_LABELS):
-        next_labels = DESCRIPTION_FIELD_LABELS[i + 1:]
+    source_labels = [source for source, _ in DESCRIPTION_FIELD_LABELS]
+    for i, (source_label, display_label) in enumerate(DESCRIPTION_FIELD_LABELS):
+        next_labels = source_labels[i + 1:]
         if next_labels:
             lookahead = "|".join(re.escape(l) for l in next_labels)
-            pattern = rf"{re.escape(label)}:\s*(.*?)(?=(?:{lookahead}):|$)"
+            pattern = rf"{re.escape(source_label)}:\s*(.*?)(?=(?:{lookahead}):|$)"
         else:
-            pattern = rf"{re.escape(label)}:\s*(.*)$"
+            pattern = rf"{re.escape(source_label)}:\s*(.*)$"
         match = re.search(pattern, description)
         value = match.group(1).strip() if match else ""
-        fields[label] = value if value else DEFAULT_FIELD_VALUE
+        fields[display_label] = value if value else DEFAULT_FIELD_VALUE
     return fields
+
+
+EXPERIENCE_LABEL = "Experience"
+
+# Talab qilinayotgan ish tajribasi RSS tavsifida UMUMAN YO'Q (faqat Company/
+# Created/Region/Income bor), shu sababli uni olish uchun vakansiyaning o'z
+# sahifasini (link) alohida ochish kerak. Sahifa strukturasi vaqti-vaqti
+# bilan o'zgarishi mumkinligi uchun bir nechta variant bilan qidiramiz:
+# 1) data-qa="vacancy-experience" atributli element (asosiy variant),
+# 2) <meta name="description"> ichidagi "Требуемый опыт: ..." jumlasi,
+# 3) sahifaning istalgan joyidagi xuddi shu jumla (zaxira variant).
+EXPERIENCE_DATA_QA_RE = re.compile(
+    r'data-qa="vacancy-experience"[^>]*>([^<]+)<', re.IGNORECASE
+)
+META_DESCRIPTION_RE = re.compile(
+    r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+    re.IGNORECASE | re.DOTALL,
+)
+EXPERIENCE_IN_TEXT_RE = re.compile(
+    r"(?:Требуемый опыт|Опыт работы|Опыт)\s*:?\s*([^.\n<]+)", re.IGNORECASE
+)
+
+
+def fetch_vacancy_experience(link):
+    """Vakansiya sahifasini ochib, talab qilinayotgan ish tajribasini ajratib
+    oladi. Faqat Telegramga HAQIQATAN HAM yuborilayotgan (ya'ni avval
+    ko'rilmagan) vakansiyalar uchun chaqiriladi — shunda RSS so'rovlariga
+    qo'shimcha ravishda har bir yangi vakansiyaga bittadan so'rov qo'shiladi,
+    xolos, va tarmoq yuki minimal darajada ushlanadi.
+    Har qanday xatoda (tarmoq, 429, formatida topilmasa) butun jarayonni
+    to'xtatmaslik uchun DEFAULT_FIELD_VALUE qaytariladi."""
+    if not link:
+        return DEFAULT_FIELD_VALUE
+
+    html_text = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(link, headers=HEADERS, timeout=30)
+            if resp.status_code == 429:
+                wait = RETRY_BACKOFF_SECONDS * attempt
+                print(f"[tajriba] 429 — {wait} sek kutib, qayta urinilmoqda ({attempt}/{MAX_RETRIES}): {link}")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            html_text = resp.text
+            break
+        except requests.RequestException as e:
+            print(f"[tajriba] So'rov xatosi ({link}): {e}")
+            return DEFAULT_FIELD_VALUE
+    else:
+        print(f"[tajriba] {MAX_RETRIES} urinishdan keyin ham 429 xatosi: {link}")
+        return DEFAULT_FIELD_VALUE
+
+    if html_text is None:
+        return DEFAULT_FIELD_VALUE
+
+    match = EXPERIENCE_DATA_QA_RE.search(html_text)
+    if match:
+        raw_value = html.unescape(match.group(1)).strip()
+        # Bu yerda ba'zan "Опыт работы: 1–3 года" kabi labelning o'zi ham
+        # qiymat bilan birga kelishi mumkin — labelni olib tashlab, faqat
+        # qiymatni qoldiramiz (boshqa manbalardagi natija bilan bir xil
+        # ko'rinishda bo'lishi uchun).
+        exp_match = EXPERIENCE_IN_TEXT_RE.search(raw_value)
+        return exp_match.group(1).strip().rstrip(".") if exp_match else raw_value
+
+    meta_match = META_DESCRIPTION_RE.search(html_text)
+    if meta_match:
+        exp_match = EXPERIENCE_IN_TEXT_RE.search(html.unescape(meta_match.group(1)))
+        if exp_match:
+            return exp_match.group(1).strip().rstrip(".")
+
+    exp_match = EXPERIENCE_IN_TEXT_RE.search(html.unescape(html_text))
+    if exp_match:
+        return exp_match.group(1).strip().rstrip(".")
+
+    return DEFAULT_FIELD_VALUE
 
 
 def format_message(vacancy):
     """Har bir vakansiya uchun XABAR TUZILISHI DOIM BIR XIL bo'lishini
-    kafolatlaydi: sarlavha, so'ngra 4 ta belgilangan maydon (har biri o'z
-    qatorida, o'z labeli bilan), so'ngra havola — hh.uz'ning xom tavsif
-    matni qanday kelishidan qat'i nazar."""
+    kafolatlaydi: sarlavha, so'ngra RSS tavsifidan olingan 4 ta maydon,
+    so'ngra vakansiya sahifasidan olingan talab qilinayotgan tajriba,
+    so'ngra havola — hh.uz'ning xom matni qanday kelishidan qat'i nazar."""
     fields = parse_description_fields(vacancy["description"])
+    experience = fetch_vacancy_experience(vacancy["link"])
     lines = [f"📊 <b>{vacancy['title']}</b>"]
-    for label in DESCRIPTION_FIELD_LABELS:
-        lines.append(f"{label}: {fields[label]}")
+    for _, display_label in DESCRIPTION_FIELD_LABELS:
+        lines.append(f"{display_label}: {fields[display_label]}")
+    lines.append(f"{EXPERIENCE_LABEL}: {experience}")
     lines.append(f"🔗 {vacancy['link']}")
     return "\n".join(lines)
 
